@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<meta charset="UTF-8"> 
+<html content-type:= 'text/html' charset=utf-8>
+<head>
+<title>
+Map Generator
+</title></head>
+<body>
+<script>
+var failedMap=false;
+var maxReroll=5;
+var reRoll=0;
+var size = 20;
+var mapArr;
+var roomArr;
+var maxBlobNum;
+var endDistance;//set in Split(), used for diving map area into irregular quadrants
+function MapTile (type) {
+    this.n = 0;
+    this.e = 0;
+    this.s = 0;
+	this.w = 0;
+	this.set = 0; //set to 1 after adjustment to mark tile as completed
+	this.landmark=0;//landmarks should not be changed ever
+	this.rSpaceD=0;//indicates the space for a unique room; there are a number(this.roomspace) of tiles 
+	this.rSpaceR=0;
+	this.playerStart=0;//indicates a player start position
+	//east and south of this tile and so a unique room of size this.roomspace may be placed
+	this.blob = 0;
+	MapTile.prototype.NumExits = function(){
+		return this.n+this.e+this.s+this.w; 
+	}
+	MapTile.prototype.randomize = function(){
+	//resets this tile's properties and assigns a random value
+		this.set = 0;
+		this.blob = 0;
+		this.n = Math.floor(Math.random()*2);
+		this.e = Math.floor(Math.random()*2);
+		this.s = Math.floor(Math.random()*2);
+		this.w = Math.floor(Math.random()*2);
+	}
+	
+	MapTile.prototype.SetAll = function(dN, dE, dS, dW){
+		//sets the tile according to the presence of doors
+		//at the north, east, south and west ends respetively (1 == door, 0 == wall)
+		 this.n=dN;
+		 this.e=dE;
+		 this.s=dS;
+		 this.w=dW;
+		 this.set=1;
+	}
+	MapTile.prototype.SetLandmark = function(a,b,c,d){
+		 this.SetAll(a,b,c,d);
+		 this.landmark=1;
+		 this.blob=1;
+	}
+	MapTile.prototype.SetTo = function(dir, v){
+		if(dir==0)
+			this.n=v;
+		else if(dir==1)
+			this.e=v;
+		else if(dir==2)
+			this.s=v;
+		else if(dir==3)
+			this.w=v;
+		this.set=1;
+	}
+	MapTile.prototype.PrintChar = function(){
+		var hval = this.n*8+this.e*4+this.s*2+this.w;
+		var rStr = String("");
+		if(this.landmark==0)
+			rStr = '<font color="Red">';
+		else if(this.landmark==1)
+			rStr = '<font color="blue">';
+		if(this.playerStart==1)
+			rStr = '<font color="brown">';
+		else if(this.playerStart==2)
+			rStr = '<font color="cyan">';
+		else if(this.playerStart==3)
+			rStr = '<font color="green">';
+		else if(this.playerStart==4)
+			rStr = '<font color="DarkBlue">';
+		else if(this.playerStart==5)
+			rStr = '<font color="Olive">';
+		else if(this.playerStart==6)
+			rStr = '<font color="LightBlue">';
+		else if(this.playerStart==7)
+			rStr = '<font color="Lime">';
+		else if(this.playerStart==8)
+			rStr = '<font color="Purple">';
+
+		if(hval==0)
+			   rStr += "X ";
+		else if (hval==1)
+		   rStr += "\u2561 ";
+		else if (hval==2)
+		   rStr += "\u2565 ";
+		else if (hval==3)
+		   rStr += "\u2557 ";
+		else if (hval==4)
+		   rStr += "\u255E\u2550";
+		else if (hval==5)
+		   rStr += "\u2550\u2550";
+		else if (hval==6)
+		   rStr += "\u2554\u2550";
+		else if (hval==7)
+		   rStr += "\u2566\u2550";
+		else if (hval==8)
+		   rStr += "\u2568 ";
+		else if (hval==9)
+		   rStr += "\u255D ";
+		else if (hval==10)
+		   rStr += "\u2551  ";
+		else if (hval==11)
+		   rStr += "\u2563 ";
+		else if (hval==12)
+		   rStr += "\u255A\u2550";
+		else if (hval==13)
+		   rStr += "\u2569\u2550";
+		else if (hval==14)
+		   rStr += "\u2560\u2550";
+		else if (hval==15)
+		   rStr += "\u256C\u2550";
+		else
+			rStr = hval;			 
+		
+			rStr += "</font>";
+		return rStr;
+	}
+	MapTile.prototype.SetStart = function(n){
+		this.playerStart=n;
+	}
+	MapTile.prototype.IsEmpty = function(){
+		if(this.n==0 && this.e==0 && this.s==0 && this.w==0 )
+			return true;
+		else
+			return false;
+	}
+	MapTile.prototype.NumExits = function(){
+		return this.n+this.e+this.s+this.w;
+		
+	}
+}
+function Repair(){
+	for (i = 0; i < size; i++)  
+		for (j = 0; j < size; j++)  
+			Mend(i,j);
+
+	return Update();
+}
+function ReconditionAll(){
+	for (i = 0; i < size; i++)  
+		for (j = 0; j < size; j++)  
+			Recondition(i,j);
+
+	return Update();
+}
+function Update(){
+	var rtn = new String("");
+	for (i = 0; i < size; i++) { 
+		for (j = 0; j < size; j++)  
+				rtn = rtn + mapArr[i][j].PrintChar();
+		
+		rtn=rtn+"<br>";
+	}
+	return rtn;
+}
+function Split(){
+	var sz = 0;
+	//determine midpoint here	
+	sz = size/2;
+	
+	if(sz%2==0)
+		sy = sz/2;
+	else
+		sy = (Number(sz)-1)/2;
+	//sy is 1/4 of length
+	var buckets = new Array(sz);
+	for(var i = 0;i<sy;i++)//init all buckets to 0
+		buckets[i]=0;		
+	bNum=sz-2;
+	
+	for(var i = 0;i<bNum;i++)//add to a randomly selected bucket; only do so sz-1 times, as we will add the last bucket manually
+			buckets[Math.floor(Math.random()*(sy-1))]++;
+			
+	var ax=sz-2;//starting points
+	var ay=sz;
+	var bx=sz;
+	var by=sz-2;
+	var cx=sz+1;
+	var cy=sz;
+	var dx=sz;
+	var dy=sz+1;
+	var iInd=0;
+	
+	var iCount = buckets[0];
+	endDistance = sy-1; //to keep track of distance actually travelled
+	var ind=sy-1;
+	
+	   while(buckets[ind]==0){
+		endDistance--;
+		 ind--;}	
+    
+	for(var i=1;i<sz;i++){ 
+		//straight segments (axis aligned)
+		mapArr[ax][ay].SetTo(3,0);
+		mapArr[ax][ay-1].SetTo(1,0);
+		mapArr[bx][by].SetTo(0,0);
+		mapArr[bx-1][by].SetTo(2,0);
+		mapArr[cx][cy].SetTo(3,0);
+		mapArr[cx][cy-1].SetTo(1,0);
+		mapArr[dx][dy].SetTo(0,0);
+		mapArr[dx-1][dy].SetTo(2,0);
+		if(iCount>0)
+			iCount--;
+		else{
+			while (iCount<=0){//lateral motion
+				iInd++;
+				iCount=buckets[iInd];		
+				if((ay<size)&&(ay>0)&&(ax<size)&&(ax>0))
+					mapArr[ax][ay].SetTo(0,0);
+
+				if(ax!=0)
+					mapArr[ax-1][ay].SetTo(2,0);
+				if(cy!=0)	
+					mapArr[cx][cy-1].SetTo(2,0);
+				if((cx<size-1)&&(cy!=0))
+					mapArr[cx+1][cy-1].SetTo(0,0);
+				if(bx!=0)	
+					mapArr[bx-1][by].SetTo(3,0);
+				if((bx!=0)&&(by!=0))
+					mapArr[bx-1][by-1].SetTo(1,0);
+				if((dy<size)&&(dy>0)&&(dx<size)&&(dx>0))
+					mapArr[dx][dy].SetTo(1,0);
+				if(dy<size-1)
+					mapArr[dx][dy+1].SetTo(3,0);
+				ay++;
+				bx--;
+				cy--;
+				dx++;				
+			}iCount--;
+			
+		}
+		ax--;
+		cx++;
+		by--;
+		dy++;
+	}
+}
+function Mend (i,j) {
+	var pgen = Number(document.getElementById("pgen").value);
+	
+		
+	if((j>=0)&&(j<(size))&&(i>=0)&&(i<(size))&&(mapArr[i][j].set==0)){
+		if((j>0)&&(mapArr[i][j-1].set==1)){//WEST
+			if(mapArr[i][j-1].landmark==1)
+				mapArr[i][j].SetTo(3, mapArr[i][j-1].e);
+			else{
+				if(Math.random()>pgen){
+					mapArr[i][j-1].SetTo(1, 0);
+					mapArr[i][j].SetTo(3, 0);
+				}else{
+					mapArr[i][j-1].SetTo(1, 1);
+					mapArr[i][j].SetTo(3, 1);
+				}
+			}
+		}
+		if((i>0)&&(mapArr[i-1][j].set==1)){//NORTH
+			if(mapArr[i-1][j].landmark==1)
+				mapArr[i][j].SetTo(0, mapArr[i-1][j].s);
+			else{ 
+				if(Math.random()>pgen){
+					mapArr[i-1][j].SetTo(2, 0);
+					mapArr[i][j].SetTo(0, 0);
+				}else{
+					mapArr[i-1][j].SetTo(2, 1);
+					mapArr[i][j].SetTo(0, 1);
+				}
+			}
+		}
+		if((j<(size-1))&&(mapArr[i][j+1].set==1)){//EAST
+			if(mapArr[i][j+1].landmark==1)
+				mapArr[i][j].SetTo(1, mapArr[i][j+1].w);
+			else{
+				if(Math.random()>pgen){
+					mapArr[i][j+1].SetTo(3, 0);
+					mapArr[i][j].SetTo(1, 0);
+				}else{
+					mapArr[i][j+1].SetTo(3, 1);
+					mapArr[i][j].SetTo(1, 1);
+				}
+			}							
+		}
+		if((i<(size-1))&&(mapArr[i+1][j].set==1)){//SOUTH
+			if(mapArr[i+1][j].landmark==1)
+				mapArr[i][j].SetTo(2, mapArr[i+1][j].n);
+			else{
+				if(Math.random()>pgen){
+					mapArr[i+1][j].SetTo(0, 0);
+					mapArr[i][j].SetTo(2,0);
+				}else{
+					mapArr[i+1][j].SetTo(0, 1);
+					mapArr[i][j].SetTo(2,1);
+				}
+			} 
+				
+		}
+		
+			
+	}
+}
+function Recondition(i,j){
+	//End of mending; avoid dead ends here/recondition the tile
+	//Doing this alongside the first step would break the randomness
+	var roll = Math.floor(Math.random()*3);//0 to 2
+	var doorCount = mapArr[i][j].NumExits();
+	var d = 0;
+	var pOdds =  Number(document.getElementById("deadends").value);
+		if(doorCount==1){
+			var pRoll = Math.random();
+			if(pRoll <=pOdds) //default 30% chance of leaving this dead end alone
+				return;
+			else if(mapArr[i][j].w==1)
+				d=0;
+			else if(mapArr[i][j].n==1)
+				d=1;
+			else if(mapArr[i][j].e==1)
+				d=2;
+			else if(mapArr[i][j].s==1)
+				d=3;
+		if(roll>=d)
+			roll++;
+
+			
+		switch (roll){
+			case 0:
+				if((j>0)&&(mapArr[i][j-1].set==1)){//WEST
+					if(mapArr[i][j-1].landmark==1)
+						mapArr[i][j].SetTo(3, mapArr[i][j-1].e);
+					else{
+						mapArr[i][j-1].SetTo(1, 1);
+						mapArr[i][j].SetTo(3, 1);
+					}
+				}
+			break;
+			case 1:
+				if((i>0)&&(mapArr[i-1][j].set==1)){//NORTH
+					if(mapArr[i-1][j].landmark==1)
+						mapArr[i][j].SetTo(0, mapArr[i-1][j].s);
+					else{ 
+						mapArr[i-1][j].SetTo(2, 1);
+						mapArr[i][j].SetTo(0, 1);
+					}
+				}
+				break;
+			case 2:
+				if((j<(size-1))&&(mapArr[i][j+1].set==1)){//EAST
+					if(mapArr[i][j+1].landmark==1)
+						mapArr[i][j].SetTo(1, mapArr[i][j+1].w);
+					else{
+							mapArr[i][j+1].SetTo(3, 1);
+							mapArr[i][j].SetTo(1, 1);	
+					}							
+				}
+				break;
+			case 3:
+				if((i<(size-1))&&(mapArr[i+1][j].set==1)){//SOUTH
+					if(mapArr[i+1][j].landmark==1)
+						mapArr[i][j].SetTo(2, mapArr[i+1][j].n);
+					else{
+							mapArr[i+1][j].SetTo(0, 1);
+							mapArr[i][j].SetTo(2,1);
+					} 	
+				}
+		}
+			
+		
+	}
+}
+function BlobColour(){
+var blobInd=2;//because 1 and 0 are already used
+	for (i = 0; i < size; i++) { 
+		for (j = 0; j < size; j++) { 
+			if((mapArr[i][j].blob==0)&&(mapArr[i][j].NumExits()>0)){
+				ColourTile(i,j,blobInd);//will colour the whole blob recursively
+				blobInd++;
+			}
+		}
+	}
+	maxBlobNum=blobInd;
+}
+function ColourTile(i,j,blobind){
+	mapArr[i][j].blob=blobind;//colours this and all tiles connected to this
+	if((mapArr[i][j].n==1)&&(i>0)&&(mapArr[i-1][j].blob==0))
+		ColourTile(i-1,j,blobind);
+	if((mapArr[i][j].e==1)&&(j<size-1)&&(mapArr[i][j+1].blob==0))
+		ColourTile(i,j+1,blobind);
+	if((mapArr[i][j].s==1)&&(i<size-1)&&(mapArr[i+1][j].blob==0))
+		ColourTile(i+1,j,blobind);
+	if((mapArr[i][j].w==1)&&(j>0)&&(mapArr[i][j-1].blob==0))
+		ColourTile(i,j-1,blobind);
+}
+function GenerateUniqueRooms(){
+var roomnum = Number(document.getElementById("numrooms").value);
+var roomsize = Number(document.getElementById("sizerooms").value);
+
+roomArr = new Array(roomnum);
+//roomArr is a 3d array: [room number][room x coord][room y coord]
+ for (i = 0; i < roomnum; i++) { 
+		roomArr[i]=new Array(roomsize);
+		for (j = 0; j < roomsize; j++) { 
+			roomArr[i][j] = new Array(roomsize);
+			for (k = 0; k < roomsize; k++){ 
+			roomArr[i][j][k]= new MapTile();
+			roomArr[i][j][k].randomize();
+
+			}
+		}	
+	}
+
+}
+function AddUniqueRooms(){
+var roomnum = Number(document.getElementById("numrooms").value);
+var roomsize = Number(document.getElementById("sizerooms").value);
+
+
+for(room=0;room<roomnum;room++){
+		PlaceUniqueRoom(room,roomsize,roomsize);
+	}
+}
+function PlaceUniqueRoom(r,x,y){
+//r is the subroom number, x and y are the dimensions of the Unique room to fit
+var mapsize = document.getElementById("mapsize").value;
+var roomsize = Number(document.getElementById("sizerooms").value);
+var counter = 0;
+	for(i=mapsize-1;i>=0;i--){//iterate through all rooms starting with bottom right corner
+		for(j=mapsize-1;j>=0;j--){
+			if(j==mapsize-1 || i==mapsize-1){	//case for edge of map
+				mapArr[i][j].rSpaceD=0;
+				mapArr[i][j].rSpaceR=0;
+				}
+			else{ //all other cases handled here
+				if(mapArr[i][j+1].landmark==1)
+					mapArr[i][j].rSpaceD=0;
+				else
+					mapArr[i][j].rSpaceD = mapArr[i][j+1].rSpaceD+1;
+					
+				if(mapArr[i+1][j].landmark==1)
+					mapArr[i][j].rSpaceR=0;
+				else
+					mapArr[i][j].rSpaceR=mapArr[i+1][j].rSpaceR+1;
+				
+				//tally up number of rooms
+				if(mapArr[i][j].rSpaceD >= y && mapArr[i][j].rSpaceR >= x)//if there is space for the unique room at this location
+					counter++;
+			}
+		}
+	}
+	var randInd = Math.floor(Math.random()*counter);//a random number between 0 and n, where n 
+								//is the possible number of locations to place the room down
+	
+	var recounter = 0;
+	for(i=mapsize-1;i>=0;i--){//iterate through all rooms starting with bottom right corner
+		for(j=mapsize-1;j>=0;j--){
+			if(mapArr[i][j].rSpaceD >= y && mapArr[i][j].rSpaceR >= x){//if there is space for the unique room at this location
+				recounter++;
+				if(recounter==randInd){// this is our randomly selected spot
+					for(k=0;k<x;k++){ //place each tile down
+						for(l=0;l<y;l++){
+							mapArr[i+k][j+l].landmark=1;
+							
+							//copy tiles of sub-rooms into the map
+							//mapArr[i-k][j-l].SetAll(0, 0, 0, 0);
+							//alert(k + " " + l + " " + roomArr[r][0][0].n);
+							mapArr[i+k][j+l].SetAll(roomArr[r][k][l].n, roomArr[r][k][l].e, roomArr[r][k][l].s, roomArr[r][k][l].w);
+						}
+					}			
+				}
+			}
+		}
+	}
+}
+function ShowRooms(){
+	var roomnum = Number(document.getElementById("numrooms").value);
+	var roomsize = Number(document.getElementById("sizerooms").value);
+	var rtn = new String("");
+	var row = 0;
+	while (row < roomsize){
+		for (i = 0; i < roomnum; i++){
+		
+				for (k = 0; k < roomsize; k++) 
+					rtn = rtn + roomArr[i][row][k].PrintChar();
+				rtn=rtn+"&nbsp;&nbsp;&nbsp;";
+				
+			}
+		rtn=rtn+"<br>";
+		row++;
+	}
+	return rtn;
+}
+function Start(){
+	reRoll=0;
+	Generate();
+	while((failedMap)&&(reRoll<maxReroll)) //failed map flag thrown
+		Restart();
+		
+	if(failedMap)
+		return maxReroll + " attempts to create a map unsucessful with these parameters";
+	else
+		return Update();
+}
+function Generate(){
+	
+	console.log("roll " + reRoll);
+   //main function that generates a map from start to finish
+	size = document.getElementById("mapsize").value;
+	if(size%2!=0)
+		size++;
+	document.getElementById("mapsize").value=size;//update
+	GenerateUniqueRooms(); //determine unique rooms to place within the maze	
+	document.getElementById('rooms').innerHTML = ShowRooms();//display those rooms at bottom element
+	
+	mapArr = new Array(size); //make 2d array to hold the map
+    for (i = 0; i < size; i++) { //fill with random elements
+		mapArr[i]=new Array(size);
+		for (j = 0; j < size; j++) { 
+			mapArr[i][j] = new MapTile();
+			mapArr[i][j].randomize();
+		}	
+	}
+
+		mapArr[size/2-1][size/2-1].SetLandmark(1,1,1,1);
+		mapArr[size/2-1][size/2].SetLandmark(1,1,1,1);
+		mapArr[size/2][size/2-1].SetLandmark(1,1,1,1);
+		mapArr[size/2][size/2].SetLandmark(1,1,1,1);
+
+	
+	
+	AddUniqueRooms(); //add unique rooms before fixes are applied
+	for(k=0;k<size*2;k++) //each iteration may not repair all,
+		Repair();// so multiples ensure a clean map
+	for (i = 0; i < size; i++) { //trim all edges
+		mapArr[0][i].SetTo(0,0);
+		mapArr[i][0].SetTo(3,0);
+		mapArr[i][size-1].SetTo(1,0);
+		mapArr[size-1][i].SetTo(2,0);
+	}
+	Split();
+	BlobColour();
+	ConnectBlob();
+    AddPlayerStartPos();
+
+	return  Update();
+	
+}
+function ConnectBlob(){
+	var numOfConnections=0;
+	var curBlobNum=0;
+	var editIndI= Array(0);
+	var editIndJ= Array(0);
+	var editDir = Array(0);
+	var done = 0;
+	while(!done){
+		numOfConnections=0;
+		for (i = 0; i < size; i++) { 
+			for (j = 0; j < size; j++) { 
+				if((mapArr[i][j].blob>1)&&(curBlobNum==0))
+					curBlobNum = mapArr[i][j].blob;
+				if((curBlobNum!=0)&&(curBlobNum==mapArr[i][j].blob)){
+					if((i>0)&&(mapArr[i-1][j].blob==1)){
+						numOfConnections++;	
+						editDir.push(0);
+						editIndI.push(i);
+						editIndJ.push(j);
+						}
+					if((j<size-1)&&(mapArr[i][j+1].blob==1)){
+						numOfConnections++;
+						editDir.push(1);
+						editIndI.push(i);
+						editIndJ.push(j);
+						}
+					if((i<size-1)&&(mapArr[i+1][j].blob==1)){
+						numOfConnections++;
+						editDir.push(2);
+						editIndI.push(i);
+						editIndJ.push(j);
+						}
+					if((j>0)&&(mapArr[i][j-1].blob==1)){
+						numOfConnections++;
+						
+						editDir.push(3);
+						editIndI.push(i);
+						editIndJ.push(j);
+					}	
+				}
+			}
+		}
+		if(curBlobNum>=maxBlobNum)
+			done=1;
+		else if(editDir.length==0)
+			curBlobNum++;
+		else 
+			done=1;
+	}
+	var rep = document.getElementById("numcon").value;
+	if(numOfConnections>0){
+		for(var i=0;i<rep;i++){
+		randInd = Math.floor(Math.random()*numOfConnections);	
+		mapArr[editIndI[randInd]][editIndJ[randInd]].SetTo(editDir[randInd], 1);
+		if(editDir[randInd]==0)
+			mapArr[editIndI[randInd]-1][editIndJ[randInd]].SetTo(2, 1);
+		if(editDir[randInd]==1)
+			mapArr[editIndI[randInd]][editIndJ[randInd]+1].SetTo(3, 1);
+		if(editDir[randInd]==2)
+			mapArr[editIndI[randInd]+1][editIndJ[randInd]].SetTo(0, 1);
+		if(editDir[randInd]==3)
+			mapArr[editIndI[randInd]][editIndJ[randInd]-1].SetTo(1, 1);
+		}
+	}
+	for (i = 0; i < size; i++) { 
+			for (j = 0; j < size; j++) { 
+			if(mapArr[i][j].blob==curBlobNum)
+				mapArr[i][j].blob=1;
+			else if(mapArr[i][j].blob>curBlobNum)
+				mapArr[i][j].blob--;
+		}
+	}
+	if((curBlobNum>=2)&&(curBlobNum<maxBlobNum))
+		ConnectBlob();
+	
+	return Update();
+}
+function AddPlayerStartPos(){
+	var b = size/2;
+	var z = size-1;
+
+	var aS = size/5 | 0;//adds space between starts in adjacent zones
+	var ooRange = false; //flag set to true when there are no viable start positions for a character
+	
+	var a = b-1-endDistance+aS;//to adjust, if space is unavailable
+	while((!ooRange)&&(mapArr[a][0].IsEmpty())){//1
+		a++;
+		if((a<0)||(a>=size)) //we are now out of range
+			ooRange=true;
+	}
+	if(!ooRange)
+		mapArr[a][0].SetStart(1);
+	
+	a=b-endDistance-aS;
+	while((!ooRange)&&(mapArr[a][0].IsEmpty())){//5
+		a++;
+		if((a<0)||(a>=size)) //we are now out of range
+			ooRange=true;
+	}
+	if(!ooRange)
+		mapArr[a][0].SetStart(5);	
+	
+	a=b-1+endDistance-aS;
+	while((!ooRange)&&(mapArr[a][z].IsEmpty())){//3
+		a++;
+		if((a<0)||(a>=size)) //we are now out of range
+			ooRange=true;
+	}
+	if(!ooRange)
+		mapArr[a][z].SetStart(3);
+	
+	a=b+endDistance+aS;
+	
+	while((!ooRange)&&(mapArr[a][z].IsEmpty())){//6
+		a++;
+		if((a<0)||(a>=size)) //we are now out of range
+			ooRange=true;
+	}
+	if(!ooRange)
+		mapArr[a][z].SetStart(6);
+	
+	a=b-1+endDistance+aS;
+	while((!ooRange)&&(mapArr[0][a].IsEmpty())){//2
+		a++;
+		if((a<0)||(a>=size)) //we are now out of range
+			ooRange=true;
+	}
+	if(!ooRange)
+		mapArr[0][a].SetStart(2);
+	
+	a=b+endDistance-aS;
+	while((!ooRange)&&(mapArr[0][a].IsEmpty())){//7
+		a++;
+		if((a<0)||(a>=size)) //we are now out of range
+			ooRange=true;
+	}
+	if(!ooRange)
+		mapArr[0][a].SetStart(7);
+	
+	a=b-1-endDistance-aS;
+	while((!ooRange)&&(mapArr[z][a].IsEmpty())){//4
+		a++;
+		if((a<0)||(a>=size)) //we are now out of range
+			ooRange=true;
+	}
+	if(!ooRange)
+		mapArr[z][a].SetStart(4);
+	
+	a=b-endDistance+aS;
+	while((!ooRange)&&(mapArr[z][a].IsEmpty())){//8
+		a++;
+		if((a<0)||(a>=size)) //we are now out of range
+			ooRange=true;
+	}
+	if(!ooRange)
+		mapArr[z][a].SetStart(8);
+	
+	if(ooRange){ //this map lacks a player start position
+			failedMap=true; //throw flag
+			console.log("Failed to generate map");
+			}
+		
+		
+}
+function Restart(){
+	reRoll++;
+	failedMap=false;
+	console.log("REROLL" + reRoll);
+	if(reRoll< maxReroll)
+		Generate();
+	else
+		failedMap=true
+}
+function ConsolePrint(s){
+	document.getElementById('con').innerHTML += "<br>"+s;
+}
+function ConsoleClear(){
+	document.getElementById('con').innerHTML = "";
+}
+
+</script>
+<style>
+table, td {
+  border: 1px solid black;
+}
+p.map {
+    font-family: "courier";
+}
+</style>
+<h1>Map Generator</h1>
+<button type="button"
+onclick="document.getElementById('map').innerHTML = Start()">
+Generate The Map</button> 
+<button type="button"
+onclick="document.getElementById('map').innerHTML = ReconditionAll()">
+Remove Dead Ends</button> 
+
+<p style="text-align: left;border: 2px solid blue;
+    border-radius: 5px;
+	width: 20em;float: right;">
+
+<font size="20pt" > Legend: </font>
+<br><br>
+<font color="Red">red text denotes the maze itself. The maze is coloured in red during a check to ensure it is fully explorable; 
+if such is not the case parts of the map will be left </font><font color="Black">black.</font><font color="Red"></font>
+<br><br>
+<font color="Blue"> blue text denotes pre fabricated rooms; one will always be a 2x2 square in the center, and 2 more will be placed randomly throughout the maze.
+<br><br>
+<font color="Red">O</font><font color="brown">th</font><font color="cyan">e</font><font color="green">r </font>
+<font color="DarkBlue">co</font><font color="Olive">l</font><font color="LightBlue">ou</font><font color="Lime">r</font>
+<font color="Purple">s </font> <font color = "black">denote the various player start positions; up to 8 are currently supported
+</p>
+Size of map: <input type="text" id="mapsize" value="20"> <br>
+path gen (value between 1 and 0; 1 to favour doors, 0 to favour walls: <input type="text" id="pgen"value="0.5"> <br>
+num of connections for repairs: <input type="text" id="numcon" value="2"> <br>
+
+# of sub rooms(0 to 3): <input type="text" id="numrooms"value="2"> <br>
+size of sub rooms(1 to 4): <input type="text" id="sizerooms"value="2"> <br>
+% to cull dead ends: <input type="text" id="deadends"value="0.3"> <br>
+<p id="map" class = "map" >Map goes here</p> <p id="con" class = "con" >Console Element</p>
+<br><br>
+<p ><b>Rooms</b></p>
+<p id="rooms" class = "map" > </p>
+<p id="demo"></p>
+<script>
+</script>
+Instructions:
+
+<table style="width: 40em">
+<tr><td width="14%">
+<h4>Size of Map</h4>
+</td><td>
+The width/depth of a map. All maps are square and have equal depth and width. In order to break the map into quadrants, this must be an even number.
+</td>
+</tr>
+<tr><td>
+<h4>path gen</h4>
+</td><td>
+This is to ensure that any 2 neighbouring tiles are consistant; the entire map is scanned for any cases where there exists a door on one side of a wall, but not the other. A random number between 1 and 0 is rolled. Both sides will be made a door if this number is higher than "path gen", and both will be made a wall otherwise.
+</td></tr>
+<tr><td>
+<h4>Num of connections</h4>
+</td><td>
+Once the map is consistant, it may still contain disconnected regions from the rest of the map. These regions are then connected to one another by n new connecting pathways
+</td></tr>
+<tr><td>
+<h4>Num of sub rooms</h4>
+</td><td>
+Sub rooms are pre-defined rooms that can be placed within a map. n sub-rooms will be included.
+</td></tr>
+<tr><td>
+<h4>Size of sub rooms</h4>
+</td><td>
+And this determines the n*n size of the subrooms
+</td></tr>
+<tr><td>
+<h4>% to cull dead ends</h4>
+</td><td>
+By default, a room has a 1/4 chance of being a dead end; the "Remove Dead Ends" button will remove all but this fraction of dead ends found in the map.
+</td></tr>
+</table>
+
+</body>
+</html> 
